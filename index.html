@@ -113,6 +113,11 @@
 
       <h2>常用地址（手动填写，完全离线）</h2>
       <div class="card">
+        <div class="row" style="margin-top:0">
+          <button type="button" id="addrExport" class="btn sm">📤 导出地址（复制）</button>
+          <button type="button" id="addrImport" class="btn sm">📥 从剪贴板导入地址</button>
+        </div>
+        <p class="tip" style="margin:0 0 8px">主屏幕图标和 Safari 网页的数据互不相通：在一边点“导出”，到另一边点“导入”，两边就一样了（只加不覆盖）。</p>
         <div id="addrList" class="addr-list"></div>
         <div class="addr-form">
           <input id="addrName" type="text" placeholder="名称，例如：公司" maxlength="20">
@@ -162,6 +167,8 @@
       <div class="card">
         <button type="button" class="btn primary big" data-diag-copy>📋 复制诊断报告</button>
         <p class="tip">点它，然后把内容粘贴给我就行。</p>
+        <button type="button" id="bkOpen" class="btn">备份 / 恢复 常用地址和设置</button>
+        <p class="tip">换了浏览器、重新添加了主屏幕图标，数据会不互通；用“备份”复制一段文字，到新的地方点“恢复”粘贴即可。</p>
         <button type="button" id="resetCache" class="btn">清除缓存并刷新（更新到最新版）</button>
         <p class="tip" id="aboutTxt"></p>
       </div>
@@ -201,10 +208,11 @@
 <!-- 大图查看 -->
 <div id="viewer" class="viewer" hidden>
   <img id="viewImg" alt="">
-  <video id="viewVid" controls playsinline hidden></video>
+  <video id="viewVid" controls playsinline muted disablepictureinpicture x-webkit-airplay="deny" hidden></video>
   <div class="view-bar">
     <div id="viewInfo" class="view-info"></div>
     <div class="row">
+      <button type="button" id="viewMute" class="btn" hidden>🔇 声音已关</button>
       <button type="button" id="viewSave" class="btn primary">保存到相册</button>
       <button type="button" id="viewDel" class="btn">删除</button>
       <button type="button" id="viewClose" class="btn">关闭</button>
@@ -213,6 +221,14 @@
   </div>
 </div>
 
+<div id="bkSheet" class="sheet" hidden>
+  <div class="sheet-card">
+    <div class="row between"><b>备份 / 恢复</b><button type="button" class="x" data-close>关闭</button></div>
+    <p class="tip" style="margin-top:0">下面是当前的备份文字。复制保存好（例如发给自己）。要恢复时，把备份文字粘贴到下面的框里，点“从文字恢复”。</p>
+    <textarea id="bkText" rows="6"></textarea>
+    <div class="row"><button type="button" id="bkCopy" class="btn primary">复制备份文字</button><button type="button" id="bkRestore" class="btn">从文字恢复</button></div>
+  </div>
+</div>
 <div id="toast" class="toast"></div>
 
 <script src="region-data.js"></script>

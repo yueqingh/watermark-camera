@@ -23,25 +23,59 @@
     alTime: 'photo', alCustom: '', alAddr: '', alFb: '', alManual: '', alExtra: ''
   };
   var S = JSON.parse(JSON.stringify(DEF));
+  var BK = 'wmcam.backup.v1';
+  var bootInfo = { 主设置存在: false, 镜像存在: false, 找回来源: '无', 启动时地址数: 0 };
+  function applySettings(o) {
+    Object.keys(DEF).forEach(function (k) {
+      if (o[k] === undefined) return;
+      if (k === 'show') { Object.keys(DEF.show).forEach(function (s) { if (o.show && o.show[s] !== undefined) S.show[s] = !!o.show[s]; }); }
+      else S[k] = o[k];
+    });
+    if (o.autoPrev === true && o.after === undefined) S.after = 'preview';
+    if (!Array.isArray(S.addrs)) S.addrs = [];
+    if ((o.v || 1) < 2) S.side = o.side === undefined ? DEF.side : o.side;
+    S.v = 2;
+  }
   function loadSettings() {
     try {
-      var raw = sget(KEY);
-      if (raw) {
-        var o = JSON.parse(raw);
-        Object.keys(DEF).forEach(function (k) {
-          if (o[k] === undefined) return;
-          if (k === 'show') { Object.keys(DEF.show).forEach(function (s) { if (o.show && o.show[s] !== undefined) S.show[s] = !!o.show[s]; }); }
-          else S[k] = o[k];
-        });
-        if (o.autoPrev === true && o.after === undefined) S.after = 'preview';
-        if (!Array.isArray(S.addrs)) S.addrs = [];
-        if (S.v < 2) S.side = o.side === undefined ? DEF.side : o.side;
-        S.v = 2;
+      var raw = sget(KEY), bk = sget(BK), o = null, ob = null;
+      bootInfo.主设置存在 = !!raw; bootInfo.镜像存在 = !!bk;
+      try { if (raw) o = JSON.parse(raw); } catch (e1) { D.warn('settings', '主设置解析失败: ' + e1.message); }
+      try { if (bk) ob = JSON.parse(bk); } catch (e2) { D.warn('settings', '镜像解析失败: ' + e2.message); }
+      if (!o && ob) { o = ob; bootInfo.找回来源 = '镜像'; D.warn('settings', '主设置丢失，已从镜像恢复'); }
+      if (o) applySettings(o);
+      // 主设置在但地址是空的，镜像里却有地址：说明地址被意外丢了，找回来
+      if (!S.addrs.length && ob && Array.isArray(ob.addrs) && ob.addrs.length) {
+        S.addrs = ob.addrs; S.cur = ob.cur || ob.addrs[0].id; bootInfo.找回来源 = '镜像(地址)'; D.warn('settings', '地址为空，已从镜像找回 ' + S.addrs.length + ' 个');
       }
-      D.info('settings', '已读取设置，地址 ' + S.addrs.length + ' 个');
+      bootInfo.启动时地址数 = S.addrs.length;
+      D.info('settings', '已读取设置，地址 ' + S.addrs.length + ' 个，主设置=' + (raw ? '有' : '无') + ' 镜像=' + (bk ? '有' : '无'));
     } catch (e) { D.error('settings', e); }
   }
-  function saveSettings() { try { sset(KEY, JSON.stringify(S)); } catch (e) { D.error('settings', e); } }
+  function idbOpen() {
+    return new Promise(function (res, rej) {
+      var r = indexedDB.open('wmcam', 1);
+      r.onupgradeneeded = function () { r.result.createObjectStore('kv'); };
+      r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); };
+    });
+  }
+  function idbPut(v) { try { idbOpen().then(function (db) { db.transaction('kv', 'readwrite').objectStore('kv').put(v, 'settings'); }).catch(function () { /* */ }); } catch (e) { /* */ } }
+  function idbGet() {
+    try {
+      return idbOpen().then(function (db) { return new Promise(function (res) { var q = db.transaction('kv').objectStore('kv').get('settings'); q.onsuccess = function () { res(q.result || null); }; q.onerror = function () { res(null); }; }); }).catch(function () { return null; });
+    } catch (e) { return Promise.resolve(null); }
+  }
+  function saveSettings() {
+    try { var j = JSON.stringify(S); sset(KEY, j); sset(BK, j); idbPut(j); } catch (e) { D.error('settings', e); }
+  }
+  /* 备份文本：把设置打成一段文字，换浏览器/重装主屏幕图标后可粘贴恢复 */
+  function makeBackup() { return 'WMCAM1:' + btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }
+  function restoreBackup(txt) {
+    var t = String(txt || '').trim().replace(/^WMCAM1:/, '');
+    var o = JSON.parse(decodeURIComponent(escape(atob(t))));
+    if (!o || !Array.isArray(o.addrs)) throw new Error('这不是有效的备份文本');
+    applySettings(o); saveSettings();
+  }
 
   function curAddr() {
     var a = null;
@@ -100,7 +134,7 @@
   }
   function renderAddrs() {
     var html = S.addrs.length ? S.addrs.map(function (a) { return addrItemHtml(a, true); }).join('') :
-      '<div class="empty">还没有地址。先在下面添加一个，水印上才会显示地址。</div>';
+      '<div class="empty">还没有地址。可以在下面添加；如果你在另一个入口（Safari 网页 / 主屏幕图标）里存过，在那边点“导出地址”，回来点“从剪贴板导入地址”。</div>';
     $('#addrList').innerHTML = html;
     $('#pickList').innerHTML = S.addrs.map(function (a) { return addrItemHtml(a, false); }).join('');
     renderChip();
@@ -404,7 +438,8 @@
     viewing = it;
     var isV = it.kind === 'video';
     viewImg.hidden = isV; viewVid.hidden = !isV;
-    if (isV) { viewVid.src = it.url; } else { viewImg.src = it.url; }
+    $('#viewMute').hidden = !isV;
+    if (isV) { viewVid.muted = true; viewVid.src = it.url; syncMuteBtn(); } else { viewImg.src = it.url; }
     $('#viewInfo').textContent = it.name + ' · ' + (it.w + '×' + it.h) + ' · ' + sizeText(it.blob) + (isV ? ' · ' + mmss(it.dur) : '') + (it.saved ? ' · 已保存' : '') + (it.note ? ' · ' + it.note : '') + (it.code ? ' · 编号 ' + it.code : '');
     $('#viewTip').textContent = isV ? '点“保存到相册”，在弹出的菜单里选“存储视频”。' : '点“保存到相册”，在弹出的菜单里选“存储图像”。也可以长按上面的图片保存。';
     $('#viewer').hidden = false; D.action('查看', it.kind + ' ' + it.id);
@@ -414,6 +449,9 @@
     try { viewVid.pause(); viewVid.removeAttribute('src'); viewVid.load(); } catch (e) { /* */ }
     viewImg.removeAttribute('src'); viewing = null; renderGrids();
   }
+  function syncMuteBtn() { $('#viewMute').textContent = viewVid.muted ? '🔇 声音已关' : '🔊 声音已开'; }
+  $('#viewMute').addEventListener('click', function () { viewVid.muted = !viewVid.muted; syncMuteBtn(); D.action('预览声音', viewVid.muted ? '关' : '开'); });
+  viewVid.addEventListener('volumechange', syncMuteBtn);
   $('#viewClose').addEventListener('click', closeViewer);
   $('#viewDel').addEventListener('click', function () {
     if (!viewing) return; if (!confirm('删除这一项？（不会影响已保存到相册的）')) return;
@@ -562,6 +600,7 @@
         rec.mr.ondataavailable = function (e) { if (e.data && e.data.size) rec.chunks.push(e.data); };
         rec.mr.onerror = function (e) { D.error('rec', (e && e.error) || new Error('MediaRecorder 出错')); };
         rec.mr.onstop = finishRecord;
+        try { var n0 = new Date(); rec.lastMin = n0.getHours() * 60 + n0.getMinutes(); drawLayer(rec.layer, sz.w, sz.h, n0, undefined, rec.code); ctx.drawImage(video, 0, 0, sz.w, sz.h); ctx.drawImage(rec.layer, 0, 0); } catch (e0) { /* */ }
         rec.mr.start(1000);
         rec.on = true; rec.starting = false; rec.t0 = Date.now(); rec.stopping = false;
         recUi(true); $('#recTime').textContent = '00:00';
@@ -746,6 +785,46 @@
       return { meta: meta, tp: tp, ad: ad, base: base, code: genCode(), st: st };
     });
   }
+  /* ---- 视频处理用到的小工具 ---- */
+  var procAC = null; // 处理视频用的音频环境：必须在“开始处理”按钮点击时创建并唤醒，否则 iPhone 会拒绝
+  function unlockAudio() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!procAC || procAC.state === 'closed') procAC = new AC();
+      if (procAC.resume) procAC.resume();
+    } catch (e) { D.warn('audio', '音频环境创建失败: ' + e.message); procAC = null; }
+  }
+  function closeAudio() { try { if (procAC) procAC.close(); } catch (e) { /* */ } procAC = null; }
+  function waitEv(el, ev, ms) {
+    return new Promise(function (res) {
+      var t = setTimeout(function () { el.removeEventListener(ev, h); res(false); }, ms);
+      function h() { clearTimeout(t); res(true); }
+      el.addEventListener(ev, h, { once: true });
+    });
+  }
+  function decodeAudio(ac, ab) {
+    return new Promise(function (res, rej) {
+      var t = setTimeout(function () { rej(new Error('声音解码超时')); }, 30000);
+      var ok = function (b) { clearTimeout(t); res(b); }, no = function (e) { clearTimeout(t); rej(e || new Error('声音解码失败')); };
+      try { var p = ac.decodeAudioData(ab, ok, no); if (p && p.then) p.then(ok, no); } catch (e) { no(e); }
+    });
+  }
+  /* 兜底路径下视频会出现在“正在播放”里：让锁屏/控制中心的按钮失效，被误点也会自动继续 */
+  function guardMediaSession(on, v) {
+    try {
+      var ms = navigator.mediaSession; if (!ms) return;
+      if (on) {
+        ms.metadata = new MediaMetadata({ title: '正在加水印，请勿操作' });
+        ['pause', 'stop', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack', 'seekto'].forEach(function (a) { try { ms.setActionHandler(a, function () { /* 忽略 */ }); } catch (e) { /* */ } });
+        try { ms.setActionHandler('play', function () { try { v.play(); } catch (e) { /* */ } }); } catch (e) { /* */ }
+      } else {
+        ms.metadata = null;
+        ['play', 'pause', 'stop', 'seekbackward', 'seekforward', 'previoustrack', 'nexttrack', 'seekto'].forEach(function (a) { try { ms.setActionHandler(a, null); } catch (e) { /* */ } });
+      }
+    } catch (e) { /* */ }
+  }
+
   function processVideo(file, kind, onProg, stat, plan0) {
     return (plan0 ? Promise.resolve(plan0) : planVideo(file, kind)).then(function (plan) {
       var meta = plan.meta, tp = plan.tp, ad = plan.ad, base = plan.base, code = plan.code, addr = ad.text;
@@ -755,19 +834,21 @@
       D.info('album', '视频 ' + (file.size / 1048576).toFixed(1) + 'MB ' + meta.info + ' 时间来源=' + tp.src + ' 起始秒=' + base.getSeconds() + ' 地址来源=' + ad.note + ' 地址字数=' + addr.length + ' 时间模式=' + S.alTime);
       return new Promise(function (resolve, reject) {
         var url = URL.createObjectURL(file), v = document.createElement('video');
-        var finished = false, mr = null, chunks = [], raf = 0, wd = 0, ac = null, cv = null, layer = null, thumb = '', lastT = -1, lastMove = Date.now();
+        var finished = false, mr = null, chunks = [], raf = 0, wd = 0, cv = null, layer = null, thumb = '', lastT = -1, lastMove = Date.now(), guard = false, playing = false;
         function cleanup() {
           cancelAnimationFrame(raf); clearInterval(wd);
+          v.onpause = null;
+          if (guard) guardMediaSession(false, v);
           try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) { /* */ }
           try { URL.revokeObjectURL(url); } catch (e) { /* */ }
-          try { if (ac) ac.close(); } catch (e) { /* */ }
         }
         function fail(err) { if (finished) return; finished = true; cleanup(); try { if (mr && mr.state !== 'inactive') mr.stop(); } catch (e) { /* */ } reject(err); }
         v.playsInline = true; v.preload = 'auto'; v.setAttribute('playsinline', '');
+        v.disableRemotePlayback = true; v.setAttribute('x-webkit-airplay', 'deny');
         v.onerror = function () { fail(new Error('无法读取这个视频（格式不支持或文件损坏）')); };
         v.onloadedmetadata = function () {
-          try {
-            var vw = v.videoWidth, vh = v.videoHeight, dur = v.duration;
+          var vw = v.videoWidth, vh = v.videoHeight, dur = v.duration;
+          Promise.resolve().then(function () {
             if (!vw || !vh) throw new Error('读不到视频尺寸');
             if (!isFinite(dur) || dur <= 0) throw new Error('读不到视频时长');
             if (dur > 600) throw new Error('视频超过10分钟，请先剪成较短的几段再处理');
@@ -775,47 +856,77 @@
             cv = document.createElement('canvas'); cv.width = sz.w; cv.height = sz.h;
             layer = document.createElement('canvas'); layer.width = sz.w; layer.height = sz.h;
             drawLayer(layer, sz.w, sz.h, time, addr, code);
-            var layerKey = Math.floor(base.getTime() / 60000);
-            var ctx = cv.getContext('2d');
-            var cs = cv.captureStream(30), tracks = cs.getVideoTracks(), hasAudio = false;
-            try {
-              var AC = window.AudioContext || window.webkitAudioContext;
-              ac = new AC(); if (ac.resume) ac.resume();
-              var srcN = ac.createMediaElementSource(v), dst = ac.createMediaStreamDestination();
-              srcN.connect(dst); // 只连到录制端，不连扬声器：处理时静音
-              var at = dst.stream.getAudioTracks(); if (at.length) { tracks = tracks.concat(at); hasAudio = true; }
-            } catch (ea) { D.warn('album', '读取原视频声音失败，输出将无声: ' + ea.message); v.muted = true; }
-            var mime = pickMime(), opts = { videoBitsPerSecond: S.vq === '720' ? 4000000 : 8000000 };
-            if (mime) opts.mimeType = mime;
-            try { mr = new MediaRecorder(new MediaStream(tracks), opts); } catch (e1) { mr = new MediaRecorder(new MediaStream(tracks)); }
-            mr.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
-            mr.onerror = function (e) { fail((e && e.error) || new Error('录制出错')); };
-            mr.onstop = function () {
-              if (finished) return; finished = true; cleanup();
-              var type = mr.mimeType || mime || 'video/mp4', blob = new Blob(chunks, { type: type });
-              if (blob.size < 2000) { reject(new Error('处理后的视频为空')); return; }
-              var w = sz.w, h = sz.h; cv.width = 0; layer.width = 0;
-              resolve(addItem({ blob: blob, thumb: thumb, w: w, h: h, time: time, src: kind, note: note, kind: 'video', dur: dur, ext: extOf(type), code: code }));
-            };
-            mr.start(1000);
-            D.info('album', '视频处理开始 ' + sz.w + 'x' + sz.h + ' 时长' + mmss(dur) + ' 声音=' + (hasAudio ? '有' : '无') + ' 格式=' + (mr.mimeType || mime || '?'));
-            v.onended = function () { setTimeout(function () { try { if (mr.state !== 'inactive') mr.stop(); } catch (e) { fail(e); } }, 400); };
-            var p = v.play(); if (p && p.catch) p.catch(function (e) { fail(new Error('无法播放视频：' + (e && e.name))); });
-            var loop = function () {
-              if (finished) return;
-              try {
-                var cur = new Date(base.getTime() + v.currentTime * 1000), key = Math.floor(cur.getTime() / 60000);
-                if (key !== layerKey) { layerKey = key; drawLayer(layer, sz.w, sz.h, cur, addr, code); }
-                ctx.drawImage(v, 0, 0, sz.w, sz.h); ctx.drawImage(layer, 0, 0);
-                if (!thumb && v.currentTime > Math.min(1, dur / 2)) thumb = makeThumb(cv);
-                if (v.currentTime !== lastT) { lastT = v.currentTime; lastMove = Date.now(); }
-                onProg(Math.min(1, v.currentTime / dur));
-              } catch (e2) { /* 单帧失败忽略 */ }
-              raf = requestAnimationFrame(loop);
-            };
-            loop();
-            wd = setInterval(function () { if (!v.ended && Date.now() - lastMove > 15000) fail(new Error('视频处理卡住了（页面可能被切到了后台），请保持本页面在前台再试')); }, 1000);
-          } catch (e) { fail(e); }
+            var layerKey = Math.floor(base.getTime() / 60000), ctx = cv.getContext('2d');
+            var cs = cv.captureStream(30), tracks = cs.getVideoTracks();
+            var audioMode = 'none', audioBuf = null, audioDst = null;
+
+            /* 1) 声音：优先把声音单独解码出来（视频本身静音播放，就不会出现在下拉的“正在播放”里） */
+            var audioStep = Promise.resolve();
+            if (procAC && file.size <= 150 * 1048576) {
+              audioStep = file.arrayBuffer().then(function (ab) { return decodeAudio(procAC, ab); }).then(function (buf) {
+                audioBuf = buf; audioDst = procAC.createMediaStreamDestination(); audioMode = 'buffer'; v.muted = true;
+              }).catch(function (e) { D.warn('album', '单独解码声音失败，改用兜底方式: ' + (e && e.message)); });
+            }
+            return audioStep.then(function () {
+              if (audioMode !== 'buffer' && procAC) {
+                try {
+                  var srcN = procAC.createMediaElementSource(v); audioDst = procAC.createMediaStreamDestination();
+                  srcN.connect(audioDst); audioMode = 'element'; // 只连到录制端，不连扬声器
+                  guardMediaSession(true, v); guard = true;
+                  v.onpause = function () { if (!v.ended && !finished && playing) { D.warn('album', '播放被外部暂停，自动继续'); try { v.play(); } catch (e) { /* */ } } };
+                } catch (ea) { D.warn('album', '读取原视频声音失败，输出将无声: ' + ea.message); v.muted = true; audioMode = 'none'; }
+              } else if (audioMode === 'none') v.muted = true;
+              if (audioDst && audioDst.stream.getAudioTracks().length) tracks = tracks.concat(audioDst.stream.getAudioTracks());
+
+              /* 2) 预热：先播放一下再退回开头，保证第一帧已经能画出来（否则开头会黑屏） */
+              var pp = v.play();
+              return (pp && pp.then ? pp : Promise.resolve()).catch(function (e) { throw new Error('无法播放视频：' + (e && e.name)); })
+                .then(function () { return v.readyState >= 3 ? true : waitEv(v, 'canplay', 3000); })
+                .then(function () { v.pause(); try { v.currentTime = 0; } catch (e) { /* */ } return waitEv(v, 'seeked', 1500); })
+                .then(function () { return v.readyState >= 2 ? true : waitEv(v, 'loadeddata', 2000); });
+            }).then(function () {
+              /* 3) 先把第一帧画好，再开始录制，最后才开始播放 */
+              ctx.drawImage(v, 0, 0, sz.w, sz.h); ctx.drawImage(layer, 0, 0);
+              var mime = pickMime(), opts = { videoBitsPerSecond: S.vq === '720' ? 4000000 : 8000000 };
+              if (mime) opts.mimeType = mime;
+              try { mr = new MediaRecorder(new MediaStream(tracks), opts); } catch (e1) { mr = new MediaRecorder(new MediaStream(tracks)); }
+              mr.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+              mr.onerror = function (e) { fail((e && e.error) || new Error('录制出错')); };
+              mr.onstop = function () {
+                if (finished) return; finished = true; cleanup();
+                var type = mr.mimeType || mime || 'video/mp4', blob = new Blob(chunks, { type: type });
+                if (blob.size < 2000) { reject(new Error('处理后的视频为空')); return; }
+                var w = sz.w, h = sz.h; cv.width = 0; layer.width = 0;
+                resolve(addItem({ blob: blob, thumb: thumb, w: w, h: h, time: time, src: kind, note: note, kind: 'video', dur: dur, ext: extOf(type), code: code }));
+              };
+              var loop = function () {
+                if (finished) return;
+                try {
+                  var cur = new Date(base.getTime() + v.currentTime * 1000), key = Math.floor(cur.getTime() / 60000);
+                  if (key !== layerKey) { layerKey = key; drawLayer(layer, sz.w, sz.h, cur, addr, code); }
+                  ctx.drawImage(v, 0, 0, sz.w, sz.h); ctx.drawImage(layer, 0, 0);
+                  if (!thumb && v.currentTime > Math.min(1, dur / 2)) thumb = makeThumb(cv);
+                  if (v.currentTime !== lastT) { lastT = v.currentTime; lastMove = Date.now(); }
+                  onProg(Math.min(1, v.currentTime / dur));
+                } catch (e2) { /* 单帧失败忽略 */ }
+                raf = requestAnimationFrame(loop);
+              };
+              loop();
+              mr.start(1000);
+              D.info('album', '视频处理开始 ' + sz.w + 'x' + sz.h + ' 时长' + mmss(dur) + ' 声音方式=' + audioMode + ' 格式=' + (mr.mimeType || mime || '?'));
+              v.onended = function () { setTimeout(function () { try { if (mr.state !== 'inactive') mr.stop(); } catch (e) { fail(e); } }, 400); };
+              lastMove = Date.now();
+              var p2 = v.play();
+              if (p2 && p2.catch) p2.catch(function (e) { fail(new Error('无法播放视频：' + (e && e.name))); });
+              waitEv(v, 'playing', 4000).then(function () {
+                playing = true;
+                if (audioMode === 'buffer') { // 画面真正开始走的同一时刻，开始送声音
+                  try { var sn = procAC.createBufferSource(); sn.buffer = audioBuf; sn.connect(audioDst); sn.start(0); } catch (e) { D.warn('album', '送声音失败: ' + e.message); }
+                }
+              });
+              wd = setInterval(function () { if (!v.ended && Date.now() - lastMove > 15000) fail(new Error('视频处理卡住了（页面可能被切到了后台），请保持本页面在前台再试')); }, 1000);
+            });
+          }).catch(fail);
         };
         v.src = url;
       });
@@ -908,7 +1019,7 @@
   }
   $('#alStartBtn').addEventListener('click', function () {
     if (!pending) return; var p = pending; pending = null; coverToken++; $('#alStart').hidden = true; $('#alCovers').innerHTML = '';
-    D.action('确认封面，开始处理'); runBatch(p.files, p.kind, p.plans);
+    D.action('确认封面，开始处理'); unlockAudio(); runBatch(p.files, p.kind, p.plans);
   });
   $('#alCancelBtn').addEventListener('click', function () { D.action('取消处理'); cancelPending(); });
   function runBatch(files, kind, plans) {
@@ -940,9 +1051,9 @@
       }
       prog.textContent = msg + '。点“保存全部”存进相册。';
       D.info('album', msg);
-      working = false; $('#pickSys').disabled = $('#pickAlbum').disabled = false; renderGrids(); updateQueueUi();
+      working = false; closeAudio(); $('#pickSys').disabled = $('#pickAlbum').disabled = false; renderGrids(); updateQueueUi();
     }).catch(function (e) {
-      D.error('album', e); working = false; $('#pickSys').disabled = $('#pickAlbum').disabled = false;
+      D.error('album', e); working = false; closeAudio(); $('#pickSys').disabled = $('#pickAlbum').disabled = false;
       prog.textContent = '处理出错，请点右上角“复制诊断报告”发给我。';
     });
   }
@@ -954,6 +1065,63 @@
     try { if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) { /* */ }
     try { if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })); } catch (e) { /* */ }
     Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
+  });
+
+  $('#bkOpen').addEventListener('click', function () {
+    D.action('打开备份/恢复'); $('#bkText').value = makeBackup(); $('#bkSheet').hidden = false;
+  });
+  $('#bkCopy').addEventListener('click', function () {
+    var ta = $('#bkText'); ta.value = makeBackup(); D.action('复制备份文字');
+    var done = function () { toast('已复制备份文字'); };
+    var manual = function () { try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); } catch (e) { /* */ } toast('请手动：长按文字框 → 全选 → 拷贝'); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) { navigator.clipboard.writeText(ta.value).then(done, function () { try { ta.select(); document.execCommand('copy') ? done() : manual(); } catch (e) { manual(); } }); }
+      else { ta.select(); document.execCommand('copy') ? done() : manual(); }
+    } catch (e) { manual(); }
+  });
+  $('#bkRestore').addEventListener('click', function () {
+    try {
+      var n = S.addrs.length;
+      if (!confirm('用框里的备份文字覆盖现在的地址和设置？（现有 ' + n + ' 个地址）')) return;
+      restoreBackup($('#bkText').value);
+      syncSettingsUi(); renderAddrs(); drawPreview(); drawOverlay();
+      D.action('从备份恢复', '地址' + S.addrs.length + '个'); toast('已恢复，常用地址 ' + S.addrs.length + ' 个'); $('#bkSheet').hidden = true;
+    } catch (e) { D.warn('backup', '恢复失败 ' + e.message); toast('恢复失败：备份文字不完整或不对'); }
+  });
+
+  /* 在两个入口（Safari 网页 / 主屏幕图标）之间搬地址：一边复制，另一边从剪贴板导入，只加不覆盖 */
+  function importAddrs(txt) {
+    var t = String(txt || '').trim().replace(/^WMCAM1:/, '');
+    var o = JSON.parse(decodeURIComponent(escape(atob(t))));
+    if (!o || !Array.isArray(o.addrs)) throw new Error('不是有效的备份');
+    var have = {}, added = 0;
+    S.addrs.forEach(function (a) { have[a.text] = true; });
+    o.addrs.forEach(function (a) {
+      if (!a || !a.text || have[a.text]) return;
+      S.addrs.push({ id: 'a' + Date.now() + '_' + added, name: String(a.name || '').slice(0, 20) || Array.from(String(a.text)).slice(0, 6).join(''), text: String(a.text).slice(0, 120) });
+      have[a.text] = true; added++;
+    });
+    if (!S.cur && S.addrs.length) S.cur = S.addrs[0].id;
+    saveSettings(); renderAddrs(); drawPreview(); drawOverlay();
+    return added;
+  }
+  $('#addrExport').addEventListener('click', function () {
+    D.action('导出地址'); $('#bkText').value = makeBackup(); $('#bkSheet').hidden = false; $('#bkCopy').click();
+  });
+  $('#addrImport').addEventListener('click', function () {
+    D.action('从剪贴板导入地址');
+    var openSheet = function (why) {
+      D.warn('import', why); $('#bkText').value = ''; $('#bkSheet').hidden = false;
+      toast('请把备份文字粘贴到框里，再点“从文字恢复”');
+    };
+    var apply = function (txt) {
+      try { var n = importAddrs(txt); toast(n ? '已导入 ' + n + ' 个地址' : '没有新地址（都已存在）'); D.info('import', '导入 ' + n + ' 个'); }
+      catch (e) { D.warn('import', '剪贴板内容不是备份: ' + e.message); toast('剪贴板里没有有效的备份，请先在另一边点“导出地址”'); }
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) navigator.clipboard.readText().then(apply, function (e) { openSheet('读剪贴板被拒绝: ' + (e && e.name)); });
+      else openSheet('不支持读剪贴板');
+    } catch (e) { openSheet('读剪贴板异常: ' + e.message); }
   });
 
   D.setState(function () {
@@ -968,7 +1136,7 @@
       保存: { 照片质量: S.quality, 拍完之后: S.after },
       补水印: { 时间来源: S.alTime, 已填自定义时间: !!S.alCustom, 地址来源: String(alEff).indexOf('addr:') === 0 ? '常用地址' : alEff, 补充文字字数: S.alExtra.length, 手动地址字数: S.alManual.length, 处理中: working, 等待确认封面: !!pending },
       暂存: { 总数: items.length, 其中视频: items.filter(function (x) { return x.kind === 'video'; }).length, 未保存: unsaved().length, 本批: batch.length, 占用MB: Math.round(totalBytes() / 1048576) },
-      本地存储可用: storageOk,
+      本地存储可用: storageOk, 启动存储情况: bootInfo, 独立App模式: !!(window.navigator.standalone), 页面路径: location.pathname,
       定位权限: '本程序从不请求定位',
       区县数据条数: window.REGION_DATA && REGION_DATA.e ? REGION_DATA.e.length : 0
     };
@@ -985,6 +1153,17 @@
     $('#verTxt').textContent = 'v' + APP.version;
     $('#aboutTxt').textContent = APP.name + ' v' + APP.version + ' · 不使用定位，不上传任何照片、视频或地址 · 区县数据来源 cpca（MIT 许可）';
     syncSettingsUi(); renderAddrs(); drawPreview(); updateQueueUi();
+    if (!S.addrs.length) {
+      idbGet().then(function (v) {
+        try {
+          var o = v ? JSON.parse(v) : null;
+          if (o && Array.isArray(o.addrs) && o.addrs.length && !S.addrs.length) {
+            S.addrs = o.addrs; S.cur = o.cur || o.addrs[0].id; bootInfo.找回来源 = 'IndexedDB'; saveSettings(); renderAddrs(); drawPreview();
+            D.warn('settings', '从 IndexedDB 找回常用地址 ' + S.addrs.length + ' 个'); toast('已找回之前保存的常用地址');
+          }
+        } catch (e) { D.warn('settings', 'IndexedDB 读取失败 ' + e.message); }
+      });
+    } else saveSettings(); // 老用户升级后，把地址同步到镜像/IndexedDB 里多存一份
     if (!window.WM || !window.Util) D.error('init', new Error('脚本没加载完整（wm.js 或 util.js）'));
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().then(function (v) { D.info('store', '申请持久存储: ' + v); }); } catch (e) { /* */ }
     try {

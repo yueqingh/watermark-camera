@@ -1,5 +1,5 @@
 /* 离线缓存：联网时优先取最新文件，断网时用缓存。每次改版请同步修改下面的 VERSION。 */
-var VERSION = '1.3.0';
+var VERSION = '1.5.0';
 var CACHE = 'wmcam-' + VERSION;
 var FILES = ['./', 'index.html', 'style.css', 'diag.js', 'region-data.js', 'wm.js', 'util.js', 'app.js',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];

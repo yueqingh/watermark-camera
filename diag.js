@@ -2,7 +2,7 @@
    本文件内所有逻辑都有 try/catch 保护，不会影响主程序。 */
 (function () {
   'use strict';
-  var APP = { name: '水印相机', version: '1.3.0' };
+  var APP = { name: '水印相机', version: '1.5.0' };
   window.APP_INFO = APP;
 
   var MAX_LOG = 200, MAX_ACT = 60, MAX_ERR = 30;
