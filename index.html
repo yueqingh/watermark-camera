@@ -76,17 +76,20 @@
           <input id="alCustom" type="datetime-local">
         </label>
         <label class="row">地址用
-          <select id="alAddr">
-            <option value="current">常用地址</option>
-            <option value="photo">照片位置 + 补充</option>
-          </select>
+          <select id="alAddr"></select>
+        </label>
+        <label class="row" id="alManualRow" hidden>本次地址
+          <input id="alManual" type="text" placeholder="例如：顺和横街19号, 成都市 武侯区" maxlength="120">
         </label>
         <label class="row" id="alExtraRow" hidden>补充街道/地点
           <input id="alExtra" type="text" placeholder="例如：顺和横街19号" maxlength="60">
         </label>
-        <p class="tip" id="alTimeTip">按照片里记录的拍摄时间；视频读不到时，用文件时间（从 iPhone 相册选的视频可能是选取时的时间，建议改用自定义）。</p>
-        <p class="tip" id="alTip">地址来自设置页里选中的常用地址。</p>
-        <p class="tip">选“照片里的位置”时：iPhone 选照片界面左下角点“选项”，打开“位置”，照片才带位置；没带位置的会自动改用常用地址。</p>
+        <label class="row" id="alFbRow" hidden>没带位置时
+          <select id="alFb"></select>
+        </label>
+        <p class="tip" id="alTimeTip">时间：优先用照片/视频里记录的拍摄时间；读不到时用文件时间（从 iPhone 相册选的文件，文件时间可能是选取时的时间，建议改用自定义）。视频的水印时间会随播放走动，起始秒数取拍摄时间，没有秒数则随机。</p>
+        <p class="tip" id="alTip"></p>
+        <p class="tip" id="alGpsTip" hidden>选“照片里的位置”时：iPhone 选照片界面左下角点“选项”，打开“位置”，照片才带位置。</p>
       </div>
       <div id="alStart" class="card" hidden><p id="alStartTxt" class="tip" style="margin-top:0"></p><button type="button" id="alStartBtn" class="btn primary big">开始处理</button></div>
       <div id="alProg" class="prog" hidden></div>

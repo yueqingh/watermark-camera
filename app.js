@@ -20,7 +20,7 @@
     v: 2, addrs: [], cur: '',
     show: { time: true, date: true, week: true, addr: true, note: false, idmark: true },
     note: '', side: '水印相机', accent: '#F5A623', scale: 1, quality: 0.92, after: 'next', vq: '1080', facing: 'environment',
-    alTime: 'photo', alCustom: '', alAddr: 'current', alExtra: ''
+    alTime: 'photo', alCustom: '', alAddr: '', alFb: '', alManual: '', alExtra: ''
   };
   var S = JSON.parse(JSON.stringify(DEF));
   function loadSettings() {
@@ -104,7 +104,7 @@
     $('#addrList').innerHTML = html;
     $('#pickList').innerHTML = S.addrs.map(function (a) { return addrItemHtml(a, false); }).join('');
     renderChip();
-    updateAlTip();
+    renderAlOptions();
   }
   function selectAddr(id) {
     S.cur = id; saveSettings(); D.action('选择地址', '共' + S.addrs.length + '个');
@@ -191,10 +191,10 @@
     $('#shAddr').checked = S.show.addr; $('#shNote').checked = S.show.note; $('#shId').checked = S.show.idmark;
     $('#noteTxt').value = S.note; $('#sideTxt').value = S.side; $('#scaleRng').value = S.scale;
     $('#qual').value = String(S.quality); $('#after').value = S.after; $('#vq').value = S.vq;
-    $('#alTime').value = S.alTime; $('#alAddr').value = S.alAddr; $('#alExtra').value = S.alExtra;
+    $('#alTime').value = S.alTime; $('#alExtra').value = S.alExtra; $('#alManual').value = S.alManual;
     $('#alCustom').value = S.alCustom || '';
     $('#alCustomRow').hidden = S.alTime !== 'custom';
-    $('#alExtraRow').hidden = S.alAddr !== 'photo';
+    renderAlOptions();
     renderAccents();
   }
 
@@ -405,7 +405,7 @@
     var isV = it.kind === 'video';
     viewImg.hidden = isV; viewVid.hidden = !isV;
     if (isV) { viewVid.src = it.url; } else { viewImg.src = it.url; }
-    $('#viewInfo').textContent = it.name + ' · ' + (it.w + '×' + it.h) + ' · ' + sizeText(it.blob) + (isV ? ' · ' + mmss(it.dur) : '') + (it.saved ? ' · 已保存' : '') + (it.code ? ' · 编号 ' + it.code : '');
+    $('#viewInfo').textContent = it.name + ' · ' + (it.w + '×' + it.h) + ' · ' + sizeText(it.blob) + (isV ? ' · ' + mmss(it.dur) : '') + (it.saved ? ' · 已保存' : '') + (it.note ? ' · ' + it.note : '') + (it.code ? ' · 编号 ' + it.code : '');
     $('#viewTip').textContent = isV ? '点“保存到相册”，在弹出的菜单里选“存储视频”。' : '点“保存到相册”，在弹出的菜单里选“存储图像”。也可以长按上面的图片保存。';
     $('#viewer').hidden = false; D.action('查看', it.kind + ' ' + it.id);
   }
@@ -614,10 +614,56 @@
   }
 
   /* ================= 补水印（系统相机 / 相册；照片 + 视频） ================= */
+  function addrById(id) { for (var i = 0; i < S.addrs.length; i++) if (S.addrs[i].id === id) return S.addrs[i]; return null; }
+  function shortTxt(t, n) { var a = Array.from(t); return a.length > n ? a.slice(0, n).join('') + '…' : t; }
+  /* 补水印的“地址用”下拉：每个常用地址一项 + 照片位置 + 手动输入 */
+  function renderAlOptions() {
+    try {
+      var sel = $('#alAddr'), html = '';
+      S.addrs.forEach(function (a) { html += '<option value="addr:' + esc(a.id) + '">' + esc(a.name + ' · ' + shortTxt(a.text, 10)) + '</option>'; });
+      html += '<option value="photo">照片/视频里的位置（只到区县）</option><option value="manual">本次手动输入</option>';
+      sel.innerHTML = html;
+      var v = S.alAddr, ok = false;
+      if (v === 'current' || v === '') v = S.addrs.length ? 'addr:' + (curAddr() ? curAddr().id : S.addrs[0].id) : 'manual';
+      Array.prototype.forEach.call(sel.options, function (o) { if (o.value === v) ok = true; });
+      if (!ok) v = S.addrs.length ? 'addr:' + S.addrs[0].id : 'manual';
+      S.alAddr = v; sel.value = v;
+      var fb = '<option value="">设置里当前选中的地址</option>';
+      S.addrs.forEach(function (a) { fb += '<option value="' + esc(a.id) + '">' + esc(a.name) + '</option>'; });
+      fb += '<option value="none">不显示地址</option>';
+      $('#alFb').innerHTML = fb;
+      if (S.alFb && S.alFb !== 'none' && !addrById(S.alFb)) S.alFb = '';
+      $('#alFb').value = S.alFb;
+      $('#alManualRow').hidden = v !== 'manual';
+      $('#alExtraRow').hidden = v !== 'photo';
+      $('#alFbRow').hidden = v !== 'photo';
+      $('#alGpsTip').hidden = v !== 'photo';
+      updateAlTip();
+    } catch (e) { D.error('alopts', e); }
+  }
   function updateAlTip() {
-    var el = $('#alTip');
-    if (S.alAddr === 'photo') el.textContent = '地址 = 照片位置换算出的“省 市 区”' + (S.alExtra ? ' + 你填的补充文字' : '') + '，只精确到区县，靠近边界可能不准。视频读不到位置，会用常用地址。';
-    else el.textContent = curAddr() ? '地址来自设置页里选中的常用地址：' + curAddr().name : '还没设置常用地址，水印上将不显示地址（去“设置”添加）。';
+    var el = $('#alTip'), v = S.alAddr;
+    if (v === 'photo') el.textContent = '有位置：地址 = 位置换算出的“省 市 区”' + (S.alExtra ? ' + 你填的补充文字' : '') + '（只到区县，靠近边界可能不准）。没带位置：如果填了补充文字，就只显示补充文字；没填则用“没带位置时”选的地址。';
+    else if (v === 'manual') el.textContent = '这一批都显示你在上面填的地址。';
+    else { var a = addrById(v.slice(5)); el.textContent = a ? '这一批都显示：' + a.text : '请先在“设置”里添加常用地址。'; }
+  }
+  /* 按设置决定一张照片/一个视频的地址。meta: {lat,lng} 或 null */
+  function alAddrFor(meta, stat) {
+    var mode = S.alAddr, extra = (S.alExtra || '').trim();
+    if (mode === 'photo') {
+      if (meta && meta.lat !== null && meta.lat !== undefined) {
+        var r = Util.regionFromLatLng(meta.lat, meta.lng);
+        if (r) return { text: r.text + (extra ? ' ' + extra : ''), note: '位置' };
+        stat.noRegion++;
+      } else stat.noGps++;
+      if (extra) return { text: extra, note: '补充文字' };
+      if (S.alFb === 'none') return { text: '', note: '无地址' };
+      var fa = S.alFb ? addrById(S.alFb) : curAddr();
+      return { text: fa ? fa.text : '', note: '备用地址' };
+    }
+    if (mode === 'manual') return { text: (S.alManual || '').trim(), note: '手动地址' };
+    var a = addrById(String(mode).slice(5)) || curAddr();
+    return { text: a ? a.text : '', note: a ? a.name : '无地址' };
   }
   function localInputValue(d) { return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + 'T' + p2(d.getHours()) + ':' + p2(d.getMinutes()); }
   $('#alTime').addEventListener('change', function (e) {
@@ -627,8 +673,10 @@
   });
   $('#alCustom').addEventListener('change', function (e) { S.alCustom = e.target.value; saveSettings(); D.action('设置自定义时间'); });
   $('#alAddr').addEventListener('change', function (e) {
-    S.alAddr = e.target.value; saveSettings(); $('#alExtraRow').hidden = S.alAddr !== 'photo'; updateAlTip(); D.action('补水印地址来源', S.alAddr);
+    S.alAddr = e.target.value; saveSettings(); renderAlOptions(); D.action('补水印地址来源', S.alAddr.indexOf('addr:') === 0 ? '常用地址' : S.alAddr);
   });
+  $('#alFb').addEventListener('change', function (e) { S.alFb = e.target.value; saveSettings(); D.action('没带位置时的地址', S.alFb ? '已选' : '默认'); });
+  $('#alManual').addEventListener('input', function (e) { S.alManual = e.target.value; saveSettings(); });
   $('#alExtra').addEventListener('input', function (e) { S.alExtra = e.target.value; saveSettings(); updateAlTip(); });
 
   $('#pickSys').addEventListener('click', function () { D.action('点击系统相机'); $('#fileSys').click(); });
@@ -648,27 +696,23 @@
   }
   function toBlobP(cv, q) { return new Promise(function (res) { cv.toBlob(res, 'image/jpeg', q); }); }
 
-  /* 决定水印时间。ex 为照片 EXIF 或视频创建时间（可为空） */
+  /* 决定水印时间。返回 {date, src:'meta'|'file'|'now'|'custom', exactSec:是否带真实秒数} */
+  var TLABEL = { meta: '拍摄时间', file: '文件时间', now: '现在', custom: '自定义' };
   function pickTime(file, exTime, kind) {
-    if (S.alTime === 'custom') { var c = new Date(S.alCustom); if (!isNaN(c.getTime())) return c; }
-    if (S.alTime === 'now') return new Date();
-    if (exTime) return exTime;
-    if (kind === 'sys') return new Date();
-    return file.lastModified ? new Date(file.lastModified) : new Date();
+    if (S.alTime === 'custom') { var c = new Date(S.alCustom); if (!isNaN(c.getTime())) return { date: c, src: 'custom', exactSec: false }; }
+    if (S.alTime === 'now') return { date: new Date(), src: 'now', exactSec: true };
+    if (exTime) return { date: exTime, src: 'meta', exactSec: exTime.getSeconds() !== 0 };
+    if (kind === 'sys') return { date: new Date(), src: 'now', exactSec: true };
+    return { date: file.lastModified ? new Date(file.lastModified) : new Date(), src: 'file', exactSec: file.lastModified ? new Date(file.lastModified).getSeconds() !== 0 : true };
   }
 
   function processPhoto(file, kind, stat) {
     return Util.readExif(file).then(function (ex) {
-      var time = pickTime(file, ex.time, kind), code = genCode();
-      var addr = curAddrText(), note = '常用地址';
-      if (S.alAddr === 'photo') {
-        if (ex.lat !== null) {
-          var r = Util.regionFromLatLng(ex.lat, ex.lng);
-          if (r) { addr = r.text + (S.alExtra ? ' ' + S.alExtra : ''); note = '照片位置'; }
-          else { stat.noRegion++; note = '位置无法换算→常用地址'; }
-        } else { stat.noGps++; note = '无位置→常用地址'; }
-      }
-      D.info('album', '照片 ' + (file.size / 1048576).toFixed(1) + 'MB EXIF时间=' + (ex.time ? '有' : '无') + ' 位置=' + (ex.lat !== null ? '有' : '无') + ' 地址来源=' + note + ' 时间模式=' + S.alTime);
+      var tp = pickTime(file, ex.time, kind), time = tp.date, code = genCode();
+      if (tp.src === 'file') stat.fileTime++;
+      var ad = alAddrFor(ex, stat);
+      var note = TLABEL[tp.src] + '·' + ad.note;
+      D.info('album', '照片 ' + (file.size / 1048576).toFixed(1) + 'MB EXIF时间=' + (ex.time ? '有' : '无') + ' 位置=' + (ex.lat !== null ? '有' : '无') + ' 时间来源=' + tp.src + ' 地址来源=' + ad.note + ' 地址字数=' + ad.text.length);
       return loadImage(file).then(function (li) {
         var img = li.img, nw = img.naturalWidth, nh = img.naturalHeight;
         if (!nw || !nh) { try { URL.revokeObjectURL(li.url); } catch (e) { /* */ } throw new Error('图片尺寸为0'); }
@@ -678,7 +722,7 @@
         var ctx = cv.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
         try { URL.revokeObjectURL(li.url); } catch (e) { /* */ }
-        WM.draw(ctx, w, h, wmInfo(time, addr, code), wmOpts());
+        WM.draw(ctx, w, h, wmInfo(time, ad.text, code), wmOpts());
         var thumb = makeThumb(cv);
         return toBlobP(cv, S.quality).then(function (blob) {
           cv.width = 0; cv.height = 0;
@@ -690,10 +734,16 @@
   }
 
   /* 视频补水印：在页面里把原视频“播放”一遍，同时把画面+水印录成新视频（所以耗时=原视频时长，需保持页面在前台） */
-  function processVideo(file, kind, onProg) {
-    return Util.readVideoTime(file).then(function (vt) {
-      var time = pickTime(file, vt, kind), code = genCode(), addr = curAddrText();
-      D.info('album', '视频 ' + (file.size / 1048576).toFixed(1) + 'MB 内置时间=' + (vt ? '有' : '无') + ' 时间模式=' + S.alTime);
+  function processVideo(file, kind, onProg, stat) {
+    return Util.readVideoMeta(file).then(function (meta) {
+      var tp = pickTime(file, meta.time, kind), code = genCode();
+      if (tp.src === 'file') stat.fileTime++;
+      var ad = alAddrFor(meta, stat), addr = ad.text;
+      // 水印时间从拍摄时间开始随播放走动；没有真实秒数就随机取一个起始秒
+      var base = new Date(tp.date.getTime());
+      if (!tp.exactSec) base.setSeconds(Math.floor(Math.random() * 60), 0);
+      var time = base, note = '视频·' + TLABEL[tp.src] + '·' + ad.note;
+      D.info('album', '视频 ' + (file.size / 1048576).toFixed(1) + 'MB ' + meta.info + ' 时间来源=' + tp.src + ' 起始秒=' + base.getSeconds() + ' 地址来源=' + ad.note + ' 地址字数=' + addr.length + ' 时间模式=' + S.alTime);
       return new Promise(function (resolve, reject) {
         var url = URL.createObjectURL(file), v = document.createElement('video');
         var finished = false, mr = null, chunks = [], raf = 0, wd = 0, ac = null, cv = null, layer = null, thumb = '', lastT = -1, lastMove = Date.now();
@@ -716,6 +766,7 @@
             cv = document.createElement('canvas'); cv.width = sz.w; cv.height = sz.h;
             layer = document.createElement('canvas'); layer.width = sz.w; layer.height = sz.h;
             drawLayer(layer, sz.w, sz.h, time, addr, code);
+            var layerKey = Math.floor(base.getTime() / 60000);
             var ctx = cv.getContext('2d');
             var cs = cv.captureStream(30), tracks = cs.getVideoTracks(), hasAudio = false;
             try {
@@ -735,7 +786,7 @@
               var type = mr.mimeType || mime || 'video/mp4', blob = new Blob(chunks, { type: type });
               if (blob.size < 2000) { reject(new Error('处理后的视频为空')); return; }
               var w = sz.w, h = sz.h; cv.width = 0; layer.width = 0;
-              resolve(addItem({ blob: blob, thumb: thumb, w: w, h: h, time: time, src: kind, note: '视频', kind: 'video', dur: dur, ext: extOf(type), code: code }));
+              resolve(addItem({ blob: blob, thumb: thumb, w: w, h: h, time: time, src: kind, note: note, kind: 'video', dur: dur, ext: extOf(type), code: code }));
             };
             mr.start(1000);
             D.info('album', '视频处理开始 ' + sz.w + 'x' + sz.h + ' 时长' + mmss(dur) + ' 声音=' + (hasAudio ? '有' : '无') + ' 格式=' + (mr.mimeType || mime || '?'));
@@ -744,6 +795,8 @@
             var loop = function () {
               if (finished) return;
               try {
+                var cur = new Date(base.getTime() + v.currentTime * 1000), key = Math.floor(cur.getTime() / 60000);
+                if (key !== layerKey) { layerKey = key; drawLayer(layer, sz.w, sz.h, cur, addr, code); }
                 ctx.drawImage(v, 0, 0, sz.w, sz.h); ctx.drawImage(layer, 0, 0);
                 if (!thumb && v.currentTime > Math.min(1, dur / 2)) thumb = makeThumb(cv);
                 if (v.currentTime !== lastT) { lastT = v.currentTime; lastMove = Date.now(); }
@@ -779,7 +832,7 @@
   });
   function runBatch(files, kind) {
     working = true; batch = [];
-    var stat = { noGps: 0, noRegion: 0, fail: 0, errs: [] };
+    var stat = { noGps: 0, noRegion: 0, fileTime: 0, fail: 0, errs: [] };
     var prog = $('#alProg'); prog.hidden = false; renderGrids();
     D.action('补水印开始', (kind === 'sys' ? '系统相机' : '相册') + ' ' + files.length + '项');
     $('#pickSys').disabled = $('#pickAlbum').disabled = true;
@@ -789,7 +842,7 @@
         var head = '处理中 ' + (i + 1) + ' / ' + files.length;
         prog.textContent = head + ' …';
         var job = isVideoFile(f) ?
-          processVideo(f, kind, function (r) { prog.textContent = head + '（视频 ' + Math.round(r * 100) + '%，请保持本页面在前台）'; }) :
+          processVideo(f, kind, function (r) { prog.textContent = head + '（视频 ' + Math.round(r * 100) + '%，请保持本页面在前台）'; }, stat) :
           processPhoto(f, kind, stat);
         return job.then(function (it) { batch.push(it); renderGrids(); }, function (e) {
           stat.fail++; stat.errs.push(e && e.message); D.error('album', e);
@@ -799,8 +852,11 @@
     chain.then(function () {
       var msg = '完成：成功 ' + batch.length + ' 项';
       if (stat.fail) msg += '，失败 ' + stat.fail + ' 项（' + esc(stat.errs[0] || '') + '）';
-      if (stat.noGps) msg += '；' + stat.noGps + ' 张没带位置，已改用常用地址';
-      if (stat.noRegion) msg += '；' + stat.noRegion + ' 张位置换算不出区县';
+      if (stat.fileTime) msg += '；⚠ ' + stat.fileTime + ' 项没读到拍摄时间，用了文件时间（可能不准，可改用“自定义时间”）';
+      if (S.alAddr === 'photo') {
+        if (stat.noGps) msg += '；' + stat.noGps + ' 项没带位置';
+        if (stat.noRegion) msg += '；' + stat.noRegion + ' 项位置换算不出区县';
+      }
       prog.textContent = msg + '。点“保存全部”存进相册。';
       D.info('album', msg);
       working = false; $('#pickSys').disabled = $('#pickAlbum').disabled = false; renderGrids(); updateQueueUi();
@@ -829,7 +885,7 @@
       常用地址个数: S.addrs.length, 当前地址字数: curAddrText().length,
       水印: { 显示项: S.show, 大小: S.scale, 颜色: S.accent, 备注字数: S.note.length, 右侧文字字数: S.side.length },
       保存: { 照片质量: S.quality, 拍完之后: S.after },
-      补水印: { 时间来源: S.alTime, 已填自定义时间: !!S.alCustom, 地址来源: S.alAddr, 补充文字字数: S.alExtra.length, 处理中: working },
+      补水印: { 时间来源: S.alTime, 已填自定义时间: !!S.alCustom, 地址来源: String(S.alAddr).indexOf('addr:') === 0 ? '常用地址' : S.alAddr, 补充文字字数: S.alExtra.length, 手动地址字数: S.alManual.length, 处理中: working },
       暂存: { 总数: items.length, 其中视频: items.filter(function (x) { return x.kind === 'video'; }).length, 未保存: unsaved().length, 本批: batch.length, 占用MB: Math.round(totalBytes() / 1048576) },
       本地存储可用: storageOk,
       定位权限: '本程序从不请求定位',
@@ -838,7 +894,7 @@
   });
   D.setSensitive(function () {
     var a = S.addrs.map(function (x) { return x.text; });
-    a.push(S.note, S.side, S.alExtra);
+    a.push(S.note, S.side, S.alExtra, S.alManual);
     return a;
   });
 

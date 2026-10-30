@@ -195,5 +195,71 @@
     return step().catch(function () { return null; });
   }
 
-  window.Util = { readVideoTime: readVideoTime, readExif: readExif, regionFromLatLng: regionFromLatLng, buildZip: buildZip, fileStamp: fileStamp, p2: p2 };
+  /* ---------- 视频元数据：拍摄时间(优先苹果 creationdate) + 位置(ISO6709) ---------- */
+  function latin1(u8) {
+    var out = [], CH = 8192;
+    for (var i = 0; i < u8.length; i += CH) out.push(String.fromCharCode.apply(null, u8.subarray(i, Math.min(u8.length, i + CH))));
+    return out.join('');
+  }
+  function plausible(d) { return d && !isNaN(d.getTime()) && d.getFullYear() > 1990 && d.getTime() < Date.now() + 86400000; }
+  function readVideoMeta(file) {
+    var res = { time: null, timeFrom: '', lat: null, lng: null, info: '' };
+    var off = 0, guard = 0, boxes = [];
+    function finish() { res.info = 'boxes=' + boxes.join(',') + ' 时间来源=' + (res.timeFrom || '无') + ' 位置=' + (res.lat !== null ? '有' : '无'); return res; }
+    function step() {
+      if (guard++ > 40 || off >= file.size) return Promise.resolve(finish());
+      return readSlice(file, off, 16).then(function (h) {
+        if (!h || h.byteLength < 8) return finish();
+        var size = h.getUint32(0), type = tag(h, 4), hdr = 8;
+        if (size === 1 && h.byteLength >= 16) { size = h.getUint32(8) * 4294967296 + h.getUint32(12); hdr = 16; }
+        else if (size === 0) size = file.size - off;
+        boxes.push(type);
+        if (type === 'moov') {
+          var take = Math.min(size - hdr, 16 * 1048576);
+          return new Promise(function (resolve) {
+            try {
+              var r = new FileReader();
+              r.onload = function () { resolve(new Uint8Array(r.result)); };
+              r.onerror = function () { resolve(null); };
+              r.readAsArrayBuffer(file.slice(off + hdr, off + hdr + take));
+            } catch (e) { resolve(null); }
+          }).then(function (u8) {
+            if (!u8) return finish();
+            var txt = latin1(u8), m;
+            // 1) 苹果 com.apple.quicktime.creationdate（带时区的本地拍摄时间，如 2026-10-30T13:19:05+0800）
+            m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[+-]\d{2}:?\d{2}|Z)/.exec(txt);
+            if (m) {
+              var d1 = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+              if (plausible(d1)) { res.time = d1; res.timeFrom = 'quicktime-creationdate'; }
+            }
+            // 2) mvhd / mdhd / tkhd 的创建时间（UTC）
+            if (!res.time) {
+              ['mvhd', 'mdhd', 'tkhd'].some(function (t) {
+                var from = 0, idx;
+                while ((idx = txt.indexOf(t, from)) >= 0) {
+                  from = idx + 4;
+                  if (idx + 20 > u8.length) break;
+                  var dv = new DataView(u8.buffer, u8.byteOffset + idx + 4, 16), ver = dv.getUint8(0);
+                  var secs = ver === 1 ? dv.getUint32(4) * 4294967296 + dv.getUint32(8) : dv.getUint32(4);
+                  if (!secs) continue;
+                  var d2 = new Date((secs - 2082844800) * 1000);
+                  if (plausible(d2)) { res.time = d2; res.timeFrom = t; return true; }
+                }
+                return false;
+              });
+            }
+            // 3) 位置 ISO6709，如 +30.6419+104.0432+500.000/
+            var g = /([+-]\d{1,2}\.\d{2,})([+-]\d{1,3}\.\d{2,})(?:[+-]\d+(?:\.\d+)?)?\//.exec(txt);
+            if (g) { var la = parseFloat(g[1]), lo = parseFloat(g[2]); if (isFinite(la) && isFinite(lo) && (la || lo)) { res.lat = la; res.lng = lo; } }
+            return finish();
+          });
+        }
+        if (size < 8) return finish();
+        off += size; return step();
+      });
+    }
+    return step().catch(function (e) { res.info = '读取失败: ' + (e && e.message); return res; });
+  }
+
+  window.Util = { readVideoMeta: readVideoMeta, readVideoTime: readVideoTime, readExif: readExif, regionFromLatLng: regionFromLatLng, buildZip: buildZip, fileStamp: fileStamp, p2: p2 };
 })();
