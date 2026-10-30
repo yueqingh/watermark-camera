@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="水印相机">
+<meta name="theme-color" content="#000000">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>水印相机</title>
+<script src="diag.js"></script>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="ttl">水印相机 <small id="verTxt"></small></div>
+    <button type="button" class="diag-btn" data-diag-copy>📋 复制诊断报告</button>
+  </header>
+
+  <main>
+    <!-- ============ 拍照 ============ -->
+    <section id="tab-cam" class="tab active">
+      <div id="stage" class="stage">
+        <div id="frame" class="frame" hidden>
+          <video id="video" playsinline muted autoplay></video>
+          <canvas id="ovl"></canvas>
+          <div id="flash" class="flash"></div>
+        </div>
+        <div id="camHint" class="cam-hint">
+          <div class="big">📷</div>
+          <p id="camMsg">点下面的按钮开启相机。<br>不需要定位权限，只会请求“相机”。</p>
+          <button type="button" id="camStart" class="btn primary">开启相机</button>
+          <button type="button" id="camSys" class="btn">用系统相机拍（画质最好）</button>
+        </div>
+      </div>
+      <div class="cam-bar">
+        <button type="button" id="addrChip" class="chip">📍 <span id="addrChipTxt">未设置地址</span></button>
+        <div class="shutter-row">
+          <button type="button" id="thumbBtn" class="thumb-btn" aria-label="已拍照片"><span id="thumbCount">0</span></button>
+          <button type="button" id="shutter" class="shutter" aria-label="拍照" disabled></button>
+          <button type="button" id="flip" class="round-btn" aria-label="切换前后镜头">⟲</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 补水印 ============ -->
+    <section id="tab-album" class="tab scroll">
+      <h2>给已有照片加水印</h2>
+      <div class="card">
+        <div class="two">
+          <button type="button" id="pickSys" class="btn primary big">用系统相机拍一张</button>
+          <button type="button" id="pickAlbum" class="btn big">从相册选照片（可多选）</button>
+        </div>
+        <input id="fileSys" type="file" accept="image/*" capture="environment" hidden>
+        <input id="fileAlbum" type="file" accept="image/*" multiple hidden>
+        <p class="tip">系统相机拍的画质最好，但拍之前看不到水印，拍完自动加上。</p>
+      </div>
+      <div class="card">
+        <label class="row">时间用
+          <select id="alTime">
+            <option value="photo">照片拍摄时间</option>
+            <option value="now">现在时间</option>
+          </select>
+        </label>
+        <label class="row">地址用
+          <select id="alAddr">
+            <option value="current">常用地址</option>
+            <option value="photo">照片位置 + 补充</option>
+          </select>
+        </label>
+        <label class="row" id="alExtraRow" hidden>补充街道/地点
+          <input id="alExtra" type="text" placeholder="例如：顺和横街19号" maxlength="60">
+        </label>
+        <p class="tip" id="alTip">地址来自设置页里选中的常用地址。</p>
+        <p class="tip">选“照片里的位置”时：iPhone 选照片界面左下角点“选项”，打开“位置”，照片才带位置；没带位置的会自动改用常用地址。</p>
+      </div>
+      <div id="alProg" class="prog" hidden></div>
+      <div id="alRes" class="card" hidden>
+        <div class="row between"><b id="alResTitle">结果</b>
+          <span><button type="button" id="alSaveAll" class="btn primary sm">保存全部</button>
+          <button type="button" id="alZip" class="btn sm">打包ZIP</button></span></div>
+        <div id="alGrid" class="grid"></div>
+      </div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section id="tab-set" class="tab scroll">
+      <h2>水印预览</h2>
+      <div class="card"><canvas id="prevCv" width="540" height="720"></canvas></div>
+
+      <h2>常用地址（手动填写，完全离线）</h2>
+      <div class="card">
+        <div id="addrList" class="addr-list"></div>
+        <div class="addr-form">
+          <input id="addrName" type="text" placeholder="名称，例如：公司" maxlength="20">
+          <textarea id="addrText" rows="2" placeholder="水印上显示的地址，例如：顺和横街19号, 四川省, 成都市 武侯区" maxlength="120"></textarea>
+          <div class="row"><button type="button" id="addrSave" class="btn primary">添加</button>
+          <button type="button" id="addrCancel" class="btn" hidden>取消修改</button></div>
+        </div>
+      </div>
+
+      <h2>水印内容</h2>
+      <div class="card">
+        <label class="sw"><input type="checkbox" id="shTime"> 大时间（如 13:19）</label>
+        <label class="sw"><input type="checkbox" id="shDate"> 日期</label>
+        <label class="sw"><input type="checkbox" id="shWeek"> 星期</label>
+        <label class="sw"><input type="checkbox" id="shAddr"> 地址</label>
+        <label class="sw"><input type="checkbox" id="shNote"> 备注文字（显示在地址下面）</label>
+        <input id="noteTxt" type="text" placeholder="备注，例如：施工现场巡查" maxlength="60">
+        <label class="row">右侧竖排文字（可留空）
+          <input id="sideTxt" type="text" placeholder="例如：张三 · 项目部" maxlength="40">
+        </label>
+        <div class="row">竖线颜色
+          <span id="accents" class="accents"></span></div>
+        <label class="row">水印大小 <input id="scaleRng" type="range" min="0.7" max="1.6" step="0.05"></label>
+      </div>
+
+      <h2>保存</h2>
+      <div class="card">
+        <label class="row">照片质量
+          <select id="qual"><option value="0.85">标准（文件小）</option><option value="0.92">高（默认）</option><option value="0.97">最高（文件大）</option></select>
+        </label>
+        <label class="sw"><input type="checkbox" id="autoPrev"> 拍完立即预览并保存</label>
+      </div>
+
+      <h2>出问题时</h2>
+      <div class="card">
+        <button type="button" class="btn primary big" data-diag-copy>📋 复制诊断报告</button>
+        <p class="tip">点它，然后把内容粘贴给我就行。</p>
+        <button type="button" id="resetCache" class="btn">清除缓存并刷新（更新到最新版）</button>
+        <p class="tip" id="aboutTxt"></p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button type="button" data-tab="cam" class="on">📷<span>拍照</span></button>
+    <button type="button" data-tab="album">🖼<span>补水印</span></button>
+    <button type="button" data-tab="set">⚙️<span>设置</span></button>
+  </nav>
+</div>
+
+<!-- 选择地址 -->
+<div id="pickSheet" class="sheet" hidden>
+  <div class="sheet-card">
+    <div class="row between"><b>选择水印地址</b><button type="button" class="x" data-close>关闭</button></div>
+    <div id="pickList" class="addr-list"></div>
+    <button type="button" id="pickManage" class="btn">管理地址…</button>
+  </div>
+</div>
+
+<!-- 已拍照片 -->
+<div id="galSheet" class="sheet" hidden>
+  <div class="sheet-card tall">
+    <div class="row between"><b id="galTitle">已拍照片</b><button type="button" class="x" data-close>关闭</button></div>
+    <div id="galGrid" class="grid"></div>
+    <div class="row">
+      <button type="button" id="galSaveAll" class="btn primary">保存全部</button>
+      <button type="button" id="galZip" class="btn">打包ZIP</button>
+      <button type="button" id="galClear" class="btn">清空</button>
+    </div>
+    <p class="tip">照片只暂存在本页面，关闭或刷新页面后就没了，所以拍完请点“保存”。</p>
+  </div>
+</div>
+
+<!-- 大图查看 -->
+<div id="viewer" class="viewer" hidden>
+  <img id="viewImg" alt="">
+  <div class="view-bar">
+    <div id="viewInfo" class="view-info"></div>
+    <div class="row">
+      <button type="button" id="viewSave" class="btn primary">保存到相册</button>
+      <button type="button" id="viewDel" class="btn">删除</button>
+      <button type="button" id="viewClose" class="btn">继续拍</button>
+    </div>
+    <p class="tip" id="viewTip">点“保存到相册”，在弹出的菜单里选“存储图像”。</p>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="region-data.js"></script>
+<script src="wm.js"></script>
+<script src="util.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
