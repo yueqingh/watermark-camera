@@ -31,8 +31,8 @@
     return t.join('') + '…';
   }
 
-  /* info: {time: Date, addr: string, note: string, side: string}
-     o: {scale, accent, show:{time,date,week,addr,note}} */
+  /* info: {time: Date, addr: string, note: string, side: string, code: string}
+     o: {scale, accent, show:{time,date,week,addr,note,idmark}} */
   function draw(ctx, W, H, info, o) {
     o = o || {};
     var show = o.show || {};
@@ -126,16 +126,27 @@
       }
     }
 
-    /* 右侧竖排文字（向上阅读） */
-    if (info.side) {
+    /* 右侧竖排（向上阅读）：小图标 + 14位编号 + 自定义文字 */
+    var showId = show.idmark !== false && !!info.code;
+    if (showId || info.side) {
       var sfs = 26 * u;
       ctx.font = '500 ' + sfs + 'px ' + FAM;
-      var sideMax = H * 0.5;
-      var txt = fitText(ctx, info.side, sideMax);
+      var sideMax = H * 0.56, cx = 0;
       ctx.save();
-      ctx.translate(W - 24 * u, H * 0.6);
+      ctx.translate(W - 24 * u, H * 0.62);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillText(txt, 0, 0);
+      if (showId) {
+        // 小图标：圆环 + 圆点（只是装饰，不代表任何认证）
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.4 * u;
+        ctx.beginPath(); ctx.arc(sfs * 0.46, -sfs * 0.36, sfs * 0.4, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(sfs * 0.46, -sfs * 0.36, sfs * 0.14, 0, Math.PI * 2); ctx.fill();
+        cx += sfs * 1.3;
+        ctx.fillText(info.code, cx, 0);
+        cx += ctx.measureText(info.code).width + sfs * 0.8;
+      }
+      if (info.side) {
+        ctx.fillText(fitText(ctx, info.side, Math.max(sfs * 3, sideMax - cx)), cx, 0);
+      }
       ctx.restore();
     }
     ctx.restore();

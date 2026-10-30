@@ -157,5 +157,43 @@
     return d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '_' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
   }
 
-  window.Util = { readExif: readExif, regionFromLatLng: regionFromLatLng, buildZip: buildZip, fileStamp: fileStamp, p2: p2 };
+
+  /* ---------- 视频(mp4/mov)里的拍摄时间：读 moov/mvhd 的创建时间（UTC） ---------- */
+  function readSlice(file, start, len) {
+    return new Promise(function (resolve) {
+      try {
+        var r = new FileReader();
+        r.onload = function () { resolve(new DataView(r.result)); };
+        r.onerror = function () { resolve(null); };
+        r.readAsArrayBuffer(file.slice(start, start + len));
+      } catch (e) { resolve(null); }
+    });
+  }
+  function tag(dv, o) { return String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3)); }
+  function readVideoTime(file) {
+    var off = 0, guard = 0;
+    function step() {
+      if (guard++ > 40 || off >= file.size) return Promise.resolve(null);
+      return readSlice(file, off, 16).then(function (h) {
+        if (!h || h.byteLength < 8) return null;
+        var size = h.getUint32(0), type = tag(h, 4), hdr = 8;
+        if (size === 1 && h.byteLength >= 16) { size = h.getUint32(8) * 4294967296 + h.getUint32(12); hdr = 16; }
+        else if (size === 0) size = file.size - off;
+        if (type === 'moov') {
+          return readSlice(file, off + hdr, 64).then(function (m) {
+            if (!m || m.byteLength < 24 || tag(m, 4) !== 'mvhd') return null;
+            var ver = m.getUint8(8), secs = ver === 1 ? m.getUint32(12) * 4294967296 + m.getUint32(16) : m.getUint32(12);
+            if (!secs) return null;
+            var d = new Date((secs - 2082844800) * 1000);
+            return d.getFullYear() > 1990 && d.getTime() < Date.now() + 86400000 ? d : null;
+          });
+        }
+        if (size < 8) return null;
+        off += size; return step();
+      });
+    }
+    return step().catch(function () { return null; });
+  }
+
+  window.Util = { readVideoTime: readVideoTime, readExif: readExif, regionFromLatLng: regionFromLatLng, buildZip: buildZip, fileStamp: fileStamp, p2: p2 };
 })();
