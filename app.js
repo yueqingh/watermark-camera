@@ -617,6 +617,7 @@
   function addrById(id) { for (var i = 0; i < S.addrs.length; i++) if (S.addrs[i].id === id) return S.addrs[i]; return null; }
   function shortTxt(t, n) { var a = Array.from(t); return a.length > n ? a.slice(0, n).join('') + '…' : t; }
   /* 补水印的“地址用”下拉：每个常用地址一项 + 照片位置 + 手动输入 */
+  var alEff = 'manual';
   function renderAlOptions() {
     try {
       var sel = $('#alAddr'), html = '';
@@ -624,10 +625,10 @@
       html += '<option value="photo">照片/视频里的位置（只到区县）</option><option value="manual">本次手动输入</option>';
       sel.innerHTML = html;
       var v = S.alAddr, ok = false;
-      if (v === 'current' || v === '') v = S.addrs.length ? 'addr:' + (curAddr() ? curAddr().id : S.addrs[0].id) : 'manual';
       Array.prototype.forEach.call(sel.options, function (o) { if (o.value === v) ok = true; });
-      if (!ok) v = S.addrs.length ? 'addr:' + S.addrs[0].id : 'manual';
-      S.alAddr = v; sel.value = v;
+      // 没选过（或选的地址已删除）：自动用当前常用地址，没有常用地址时用手动输入。不写回设置，这样以后添加地址会自动生效
+      if (!ok) v = S.addrs.length ? 'addr:' + (curAddr() ? curAddr().id : S.addrs[0].id) : 'manual';
+      alEff = v; sel.value = v;
       var fb = '<option value="">设置里当前选中的地址</option>';
       S.addrs.forEach(function (a) { fb += '<option value="' + esc(a.id) + '">' + esc(a.name) + '</option>'; });
       fb += '<option value="none">不显示地址</option>';
@@ -642,14 +643,14 @@
     } catch (e) { D.error('alopts', e); }
   }
   function updateAlTip() {
-    var el = $('#alTip'), v = S.alAddr;
+    var el = $('#alTip'), v = alEff;
     if (v === 'photo') el.textContent = '有位置：地址 = 位置换算出的“省 市 区”' + (S.alExtra ? ' + 你填的补充文字' : '') + '（只到区县，靠近边界可能不准）。没带位置：如果填了补充文字，就只显示补充文字；没填则用“没带位置时”选的地址。';
     else if (v === 'manual') el.textContent = '这一批都显示你在上面填的地址。';
     else { var a = addrById(v.slice(5)); el.textContent = a ? '这一批都显示：' + a.text : '请先在“设置”里添加常用地址。'; }
   }
   /* 按设置决定一张照片/一个视频的地址。meta: {lat,lng} 或 null */
   function alAddrFor(meta, stat) {
-    var mode = S.alAddr, extra = (S.alExtra || '').trim();
+    var mode = alEff, extra = (S.alExtra || '').trim();
     if (mode === 'photo') {
       if (meta && meta.lat !== null && meta.lat !== undefined) {
         var r = Util.regionFromLatLng(meta.lat, meta.lng);
@@ -669,15 +670,15 @@
   $('#alTime').addEventListener('change', function (e) {
     S.alTime = e.target.value; $('#alCustomRow').hidden = S.alTime !== 'custom';
     if (S.alTime === 'custom' && !S.alCustom) { S.alCustom = localInputValue(new Date()); $('#alCustom').value = S.alCustom; }
-    saveSettings(); D.action('补水印时间来源', S.alTime);
+    saveSettings(); D.action('补水印时间来源', S.alTime); refreshPending();
   });
-  $('#alCustom').addEventListener('change', function (e) { S.alCustom = e.target.value; saveSettings(); D.action('设置自定义时间'); });
+  $('#alCustom').addEventListener('change', function (e) { S.alCustom = e.target.value; saveSettings(); D.action('设置自定义时间'); refreshPending(); });
   $('#alAddr').addEventListener('change', function (e) {
-    S.alAddr = e.target.value; saveSettings(); renderAlOptions(); D.action('补水印地址来源', S.alAddr.indexOf('addr:') === 0 ? '常用地址' : S.alAddr);
+    S.alAddr = e.target.value; saveSettings(); renderAlOptions(); D.action('补水印地址来源', alEff.indexOf('addr:') === 0 ? '常用地址' : alEff); refreshPending();
   });
-  $('#alFb').addEventListener('change', function (e) { S.alFb = e.target.value; saveSettings(); D.action('没带位置时的地址', S.alFb ? '已选' : '默认'); });
-  $('#alManual').addEventListener('input', function (e) { S.alManual = e.target.value; saveSettings(); });
-  $('#alExtra').addEventListener('input', function (e) { S.alExtra = e.target.value; saveSettings(); updateAlTip(); });
+  $('#alFb').addEventListener('change', function (e) { S.alFb = e.target.value; saveSettings(); D.action('没带位置时的地址', S.alFb ? '已选' : '默认'); refreshPending(); });
+  $('#alManual').addEventListener('input', function (e) { S.alManual = e.target.value; saveSettings(); refreshPending(); });
+  $('#alExtra').addEventListener('input', function (e) { S.alExtra = e.target.value; saveSettings(); updateAlTip(); refreshPending(); });
 
   $('#pickSys').addEventListener('click', function () { D.action('点击系统相机'); $('#fileSys').click(); });
   $('#camSys').addEventListener('click', function () { D.action('点击系统相机(拍照页)'); $('#fileSys').click(); });
@@ -734,14 +735,22 @@
   }
 
   /* 视频补水印：在页面里把原视频“播放”一遍，同时把画面+水印录成新视频（所以耗时=原视频时长，需保持页面在前台） */
-  function processVideo(file, kind, onProg, stat) {
+  /* 先“规划”一个视频：读元数据、决定时间/地址/编号。封面预览和正式处理共用同一份，保证所见即所得 */
+  function planVideo(file, kind) {
     return Util.readVideoMeta(file).then(function (meta) {
-      var tp = pickTime(file, meta.time, kind), code = genCode();
-      if (tp.src === 'file') stat.fileTime++;
-      var ad = alAddrFor(meta, stat), addr = ad.text;
+      var st = { noGps: 0, noRegion: 0 };
+      var tp = pickTime(file, meta.time, kind), ad = alAddrFor(meta, st);
       // 水印时间从拍摄时间开始随播放走动；没有真实秒数就随机取一个起始秒
       var base = new Date(tp.date.getTime());
       if (!tp.exactSec) base.setSeconds(Math.floor(Math.random() * 60), 0);
+      return { meta: meta, tp: tp, ad: ad, base: base, code: genCode(), st: st };
+    });
+  }
+  function processVideo(file, kind, onProg, stat, plan0) {
+    return (plan0 ? Promise.resolve(plan0) : planVideo(file, kind)).then(function (plan) {
+      var meta = plan.meta, tp = plan.tp, ad = plan.ad, base = plan.base, code = plan.code, addr = ad.text;
+      if (tp.src === 'file') stat.fileTime++;
+      stat.noGps += plan.st.noGps; stat.noRegion += plan.st.noRegion;
       var time = base, note = '视频·' + TLABEL[tp.src] + '·' + ad.note;
       D.info('album', '视频 ' + (file.size / 1048576).toFixed(1) + 'MB ' + meta.info + ' 时间来源=' + tp.src + ' 起始秒=' + base.getSeconds() + ' 地址来源=' + ad.note + ' 地址字数=' + addr.length + ' 时间模式=' + S.alTime);
       return new Promise(function (resolve, reject) {
@@ -813,24 +822,96 @@
     });
   }
 
-  var working = false, pending = null;
+  var working = false, pending = null, coverToken = 0, refreshTimer = 0;
+
+  /* 取视频靠前的一帧，叠上水印，做成预览图 */
+  function makeCover(file, plan) {
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(file), v = document.createElement('video'), done = false, timer = 0;
+      function end(res) {
+        if (done) return; done = true; clearTimeout(timer);
+        try { v.pause(); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url); } catch (e) { /* */ }
+        resolve(res);
+      }
+      v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto';
+      v.onerror = function () { end(null); };
+      v.onloadedmetadata = function () { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch (e) { end(null); } };
+      v.onseeked = function () {
+        try {
+          var vw = v.videoWidth, vh = v.videoHeight; if (!vw || !vh) { end(null); return; }
+          var sc = Math.min(1, 900 / Math.max(vw, vh)), w = Math.round(vw * sc), h = Math.round(vh * sc);
+          var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+          var ctx = cv.getContext('2d'); ctx.drawImage(v, 0, 0, w, h);
+          WM.draw(ctx, w, h, wmInfo(plan.base, plan.ad.text, plan.code), wmOpts());
+          var u = cv.toDataURL('image/jpeg', 0.82), dur = v.duration; cv.width = 0;
+          end({ url: u, w: vw, h: vh, dur: dur });
+        } catch (e) { D.warn('cover', '封面生成失败: ' + e.message); end(null); }
+      };
+      timer = setTimeout(function () { D.warn('cover', '封面生成超时'); end(null); }, 8000);
+      v.src = url;
+    });
+  }
+  function fmtTime(d) { return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); }
+
+  /* 显示/刷新“确认封面”卡片 */
+  function showCovers() {
+    if (!pending) return;
+    var p = pending, token = ++coverToken;
+    var vids = [];
+    p.files.forEach(function (f, i) { if (isVideoFile(f)) vids.push(i); });
+    var nPhoto = p.files.length - vids.length;
+    p.plans = {};
+    $('#alStart').hidden = false; $('#alProg').hidden = true;
+    $('#alCovers').innerHTML = '';
+    $('#alStartBtn').disabled = true;
+    $('#alStartTxt').textContent = '正在生成视频封面预览…';
+    var chain = Promise.resolve();
+    vids.forEach(function (idx, k) {
+      chain = chain.then(function () {
+        if (token !== coverToken) return;
+        return planVideo(p.files[idx], p.kind).then(function (plan) {
+          if (token !== coverToken) return;
+          p.plans[idx] = plan;
+          return makeCover(p.files[idx], plan).then(function (cov) {
+            if (token !== coverToken) return;
+            var info = '时间：' + fmtTime(plan.base) + '（' + TLABEL[plan.tp.src] + '）· 地址：' + (plan.ad.text ? esc(shortTxt(plan.ad.text, 18)) : '不显示');
+            var html = '<div class="cover">' + (cov ? '<img src="' + cov.url + '" alt="封面">' : '<div class="cover-miss">封面没能生成（不影响处理）</div>') +
+              '<div class="tip">第 ' + (k + 1) + ' 个视频' + (cov ? ' · ' + mmss(cov.dur) : '') + '<br>' + info + '</div></div>';
+            $('#alCovers').insertAdjacentHTML('beforeend', html);
+            D.info('cover', '视频' + (k + 1) + ' 封面' + (cov ? '已生成' : '失败') + ' 时间来源=' + plan.tp.src);
+          });
+        });
+      });
+    });
+    chain.then(function () {
+      if (token !== coverToken) return;
+      $('#alStartTxt').textContent = '请看封面：水印位置、时间、地址满意吗？满意就点“开始处理”；不满意可以直接改上面的时间/地址设置，封面会自动刷新，或点“取消”重新选。' +
+        (nPhoto ? '另外有 ' + nPhoto + ' 张照片会一起处理。' : '') + ' 视频要在页面里“播放一遍”来加水印，耗时和视频一样长，处理期间请保持本页面在前台、不要锁屏。';
+      $('#alStartBtn').disabled = false;
+    }).catch(function (e) { D.error('cover', e); $('#alStartTxt').textContent = '封面预览出错，仍可直接开始处理。'; $('#alStartBtn').disabled = false; });
+  }
+  function refreshPending() { if (!pending) return; clearTimeout(refreshTimer); refreshTimer = setTimeout(showCovers, 450); }
+  function cancelPending() { pending = null; coverToken++; $('#alStart').hidden = true; $('#alCovers').innerHTML = ''; }
+
   function processFiles(fileList, kind) {
     if (working) { toast('正在处理上一批，请稍等'); return; }
     var files = Array.prototype.slice.call(fileList);
     if (S.alTime === 'custom' && isNaN(new Date(S.alCustom).getTime())) { toast('请先选好“自定义时间”'); return; }
     var nv = files.filter(isVideoFile).length;
     if (nv) {
-      pending = { files: files, kind: kind };
-      $('#alStartTxt').textContent = '已选 ' + files.length + ' 项，其中 ' + nv + ' 个视频。视频要在页面里“播放一遍”来加水印，所以耗时和视频一样长，处理期间请保持本页面在前台、不要锁屏。';
-      $('#alStart').hidden = false; $('#alProg').hidden = true; D.action('等待确认开始处理', files.length + '项 含视频' + nv);
+      pending = { files: files, kind: kind, plans: {} };
+      D.action('选了视频，生成封面确认', files.length + '项 含视频' + nv);
+      showCovers();
       return;
     }
     runBatch(files, kind);
   }
   $('#alStartBtn').addEventListener('click', function () {
-    if (!pending) return; var p = pending; pending = null; $('#alStart').hidden = true; runBatch(p.files, p.kind);
+    if (!pending) return; var p = pending; pending = null; coverToken++; $('#alStart').hidden = true; $('#alCovers').innerHTML = '';
+    D.action('确认封面，开始处理'); runBatch(p.files, p.kind, p.plans);
   });
-  function runBatch(files, kind) {
+  $('#alCancelBtn').addEventListener('click', function () { D.action('取消处理'); cancelPending(); });
+  function runBatch(files, kind, plans) {
     working = true; batch = [];
     var stat = { noGps: 0, noRegion: 0, fileTime: 0, fail: 0, errs: [] };
     var prog = $('#alProg'); prog.hidden = false; renderGrids();
@@ -842,7 +923,7 @@
         var head = '处理中 ' + (i + 1) + ' / ' + files.length;
         prog.textContent = head + ' …';
         var job = isVideoFile(f) ?
-          processVideo(f, kind, function (r) { prog.textContent = head + '（视频 ' + Math.round(r * 100) + '%，请保持本页面在前台）'; }, stat) :
+          processVideo(f, kind, function (r) { prog.textContent = head + '（视频 ' + Math.round(r * 100) + '%，请保持本页面在前台）'; }, stat, plans && plans[i]) :
           processPhoto(f, kind, stat);
         return job.then(function (it) { batch.push(it); renderGrids(); }, function (e) {
           stat.fail++; stat.errs.push(e && e.message); D.error('album', e);
@@ -853,7 +934,7 @@
       var msg = '完成：成功 ' + batch.length + ' 项';
       if (stat.fail) msg += '，失败 ' + stat.fail + ' 项（' + esc(stat.errs[0] || '') + '）';
       if (stat.fileTime) msg += '；⚠ ' + stat.fileTime + ' 项没读到拍摄时间，用了文件时间（可能不准，可改用“自定义时间”）';
-      if (S.alAddr === 'photo') {
+      if (alEff === 'photo') {
         if (stat.noGps) msg += '；' + stat.noGps + ' 项没带位置';
         if (stat.noRegion) msg += '；' + stat.noRegion + ' 项位置换算不出区县';
       }
@@ -885,7 +966,7 @@
       常用地址个数: S.addrs.length, 当前地址字数: curAddrText().length,
       水印: { 显示项: S.show, 大小: S.scale, 颜色: S.accent, 备注字数: S.note.length, 右侧文字字数: S.side.length },
       保存: { 照片质量: S.quality, 拍完之后: S.after },
-      补水印: { 时间来源: S.alTime, 已填自定义时间: !!S.alCustom, 地址来源: String(S.alAddr).indexOf('addr:') === 0 ? '常用地址' : S.alAddr, 补充文字字数: S.alExtra.length, 手动地址字数: S.alManual.length, 处理中: working },
+      补水印: { 时间来源: S.alTime, 已填自定义时间: !!S.alCustom, 地址来源: String(alEff).indexOf('addr:') === 0 ? '常用地址' : alEff, 补充文字字数: S.alExtra.length, 手动地址字数: S.alManual.length, 处理中: working, 等待确认封面: !!pending },
       暂存: { 总数: items.length, 其中视频: items.filter(function (x) { return x.kind === 'video'; }).length, 未保存: unsaved().length, 本批: batch.length, 占用MB: Math.round(totalBytes() / 1048576) },
       本地存储可用: storageOk,
       定位权限: '本程序从不请求定位',

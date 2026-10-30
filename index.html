@@ -91,7 +91,12 @@
         <p class="tip" id="alTip"></p>
         <p class="tip" id="alGpsTip" hidden>选“照片里的位置”时：iPhone 选照片界面左下角点“选项”，打开“位置”，照片才带位置。</p>
       </div>
-      <div id="alStart" class="card" hidden><p id="alStartTxt" class="tip" style="margin-top:0"></p><button type="button" id="alStartBtn" class="btn primary big">开始处理</button></div>
+      <div id="alStart" class="card" hidden>
+        <b>先看看封面</b>
+        <div id="alCovers" class="covers"></div>
+        <p id="alStartTxt" class="tip"></p>
+        <div class="row"><button type="button" id="alStartBtn" class="btn primary" disabled>开始处理</button><button type="button" id="alCancelBtn" class="btn">取消</button></div>
+      </div>
       <div id="alProg" class="prog" hidden></div>
       <div id="alRes" class="card" hidden>
         <div class="row between"><b id="alResTitle">结果</b>
